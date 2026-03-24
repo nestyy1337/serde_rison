@@ -10,7 +10,7 @@ categories = ["encoding", "parser-implementations"]
 
 [dependencies]
 serde = { version = "1.0.69", features = ["derive"] }
-thiserror = "1"
+thiserror = "2"
 
 [workspace.lints.clippy]
 # Default clippy lints as errors
