@@ -68,7 +68,7 @@ jobs:
     #
     #   https://github.com/codecov/feedback/issues/112
 
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     name: ubuntu / stable / coverage
     steps:
       - uses: actions/checkout@v6

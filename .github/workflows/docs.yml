@@ -7,12 +7,9 @@
   permissions:
     contents: read
 
-  env:
-    DOCS_HOST: ${{ secrets.DOCS_HOST }}
-
   jobs:
     deploy:
-      runs-on: self-hosted
+      runs-on: ubuntu-latest
       steps:
         - uses: actions/checkout@v4
 
@@ -24,11 +21,6 @@
         - name: Build docs
           run: |
             cargo doc --no-deps --document-private-items
-            cargo doc -p secapi_client --no-deps --document-private-items
-
-        - name: Deploy docs
-          run: |
-            rsync -avz --delete target/doc/ netxp@${DOCS_HOST}:/var/www/docs/IRIS-rs
 
         - name: Deployment summary
           run: |

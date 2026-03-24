@@ -61,7 +61,7 @@ jobs:
           reporter: 'github-pr-check'
           github_token: ${{ secrets.GITHUB_TOKEN }}
   # semver:
-  #   runs-on: self-hosted
+  #   runs-on: ubuntu-latest
   #   name: semver
   #   steps:
   #     - uses: actions/checkout@v6
@@ -96,8 +96,7 @@ jobs:
         uses: dtolnay/install@cargo-docs-rs
       - name: cargo docs-rs
         run: |
-          cargo docs-rs -p iris-core
-          cargo docs-rs -p secapi_client
+          cargo docs-rs
   # we cannot test rabbitmq
   # hack:
   #   # cargo-hack checks combinations of feature flags to ensure that features are all additive
