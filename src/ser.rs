@@ -100,7 +100,9 @@ impl ser::Serializer for &mut Serializer {
     fn serialize_str(self, v: &str) -> Result<()> {
         if v.is_empty()
             || v.starts_with(|c: char| c.is_ascii_digit() || c == '-')
-            || v.contains(&['(', ')', '!', ':', ',', '\'', ' '][..])
+            || !v.chars().all(|c| {
+                c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-' | '/' | '~' | '*')
+            })
         {
             self.output += "'";
             for ch in v.chars() {
