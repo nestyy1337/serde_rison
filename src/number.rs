@@ -255,3 +255,18 @@ macro_rules! impl_from_signed {
 
 impl_from_unsigned!(u8, u16, u32, u64, usize);
 impl_from_signed!(i8, i16, i32, i64, isize);
+
+#[cfg(feature = "json")]
+impl From<serde_json::Number> for Number {
+    fn from(n: serde_json::Number) -> Self {
+        if let Some(u) = n.as_u64() {
+            u.into()
+        } else if let Some(i) = n.as_i64() {
+            i.into()
+        } else if let Some(f) = n.as_f64() {
+            Number::from_f64(f).expect("serde_json::Number should always be finite")
+        } else {
+            unreachable!("serde_json::Number is always one of u64, i64, or f64")
+        }
+    }
+}
