@@ -1,4 +1,4 @@
-//! # serde_rison
+//! # `serde_rison`
 //!
 //! A [serde](https://serde.rs) implementation for the
 //! [RISON](https://github.com/Nanonid/rison) data format.
