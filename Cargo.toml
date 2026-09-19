@@ -12,6 +12,7 @@ categories = ["encoding", "parser-implementations"]
 serde = { version = "1.0.69", features = ["derive"] }
 serde_json = { version = "1.0.25", optional = true }
 thiserror = "1"
+zmij = "1.0.23"
 
 [features]
 default = []

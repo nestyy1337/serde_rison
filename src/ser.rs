@@ -1,3 +1,5 @@
+use std::num::FpCategory;
+
 use crate::error::Error;
 use serde::{Serialize, ser};
 
@@ -85,11 +87,43 @@ impl ser::Serializer for &mut Serializer {
     }
 
     fn serialize_f32(self, v: f32) -> Result<()> {
-        self.serialize_f64(f64::from(v))
+        match v.classify() {
+            FpCategory::Nan | FpCategory::Infinite => {
+                self.output += "!n";
+            }
+            _ => {
+                let mut buf = zmij::Buffer::new();
+                let string = buf.format_finite(v);
+                let pos = string.find('+');
+                if let Some(pos) = pos {
+                    let (left, right) = string.split_at(pos);
+                    self.output += left;
+                    self.output += right;
+                } else {
+                    self.output += string;
+                }
+            }
+        }
+        Ok(())
     }
 
     fn serialize_f64(self, v: f64) -> Result<()> {
-        self.output += &v.to_string();
+        match v.classify() {
+            FpCategory::Nan | FpCategory::Infinite => {
+                self.output += "!n";
+            }
+            _ => {
+                let mut buf = zmij::Buffer::new();
+                let string = buf.format_finite(v);
+                match string.split_once('+') {
+                    Some((left, right)) => {
+                        self.output += left;
+                        self.output += right;
+                    }
+                    None => self.output += string,
+                }
+            }
+        }
         Ok(())
     }
 
@@ -534,5 +568,12 @@ mod tests {
     fn test_empty_vec() {
         let v: Vec<u32> = vec![];
         assert_eq!(to_string(&v).unwrap(), "!()");
+    }
+
+    #[test]
+    fn f64_ser() {
+        let val = 1e20_f64;
+        let string = to_string(&val).unwrap();
+        assert_eq!(string, "1e20");
     }
 }
