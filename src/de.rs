@@ -11,15 +11,36 @@ pub fn from_str<'de, T: Deserialize<'de>>(input: &'de str) -> Result<T> {
     Ok(t)
 }
 
+/// Maximum nesting of objects, arrays and enum wrappers. Deeper input is
+/// rejected instead of overflowing the stack.
+const RECURSION_LIMIT: u8 = 128;
+
 pub struct Deserializer<'de> {
     input: &'de str,
     index: usize,
+    remaining_depth: u8,
 }
 
 impl<'de> Deserializer<'de> {
     #[must_use]
     pub fn new(input: &'de str) -> Self {
-        Self { input, index: 0 }
+        Self {
+            input,
+            index: 0,
+            remaining_depth: RECURSION_LIMIT,
+        }
+    }
+
+    fn descend(&mut self) -> Result<()> {
+        self.remaining_depth = self
+            .remaining_depth
+            .checked_sub(1)
+            .ok_or_else(|| self.error(ErrorCode::RecursionLimitExceeded))?;
+        Ok(())
+    }
+
+    fn ascend(&mut self) {
+        self.remaining_depth += 1;
     }
 
     fn peek(&self) -> Option<char> {
@@ -123,12 +144,14 @@ impl<'de> Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
+        self.descend()?;
         self.consume('(')?;
         let value = visitor.visit_map(RisonMapAccess {
             de: self,
             first: true,
         })?;
         self.consume(')')?;
+        self.ascend();
         Ok(value)
     }
 
@@ -136,6 +159,7 @@ impl<'de> Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
+        self.descend()?;
         self.consume('!')?;
         self.consume('(')?;
         let value = visitor.visit_seq(RisonSeqAccess {
@@ -143,6 +167,7 @@ impl<'de> Deserializer<'de> {
             first: true,
         })?;
         self.consume(')')?;
+        self.ascend();
         Ok(value)
     }
 
@@ -470,9 +495,11 @@ impl<'de> serde::de::Deserializer<'de> for &mut Deserializer<'de> {
     {
         match self.peek() {
             Some('(') => {
+                self.descend()?;
                 self.consume('(')?;
                 let value = visitor.visit_enum(RisonEnumAccess { de: self })?;
                 self.consume(')')?;
+                self.ascend();
                 Ok(value)
             }
             _ => visitor.visit_enum(RisonEnumAccess { de: self }),
@@ -1180,6 +1207,50 @@ mod tests {
             err.to_string(),
             "invalid type: boolean `true`, expected f64 at offset 9"
         );
+    }
+
+    fn nested_arrays(depth: usize) -> String {
+        format!("{}{}", "!(".repeat(depth), ")".repeat(depth))
+    }
+
+    #[test]
+    fn test_recursion_limit() {
+        use serde::de::IgnoredAny;
+
+        let at_limit = nested_arrays(usize::from(RECURSION_LIMIT));
+        assert!(from_str::<Value>(&at_limit).is_ok());
+        assert!(from_str::<IgnoredAny>(&at_limit).is_ok());
+
+        for depth in [usize::from(RECURSION_LIMIT) + 1, 100_000] {
+            let input = nested_arrays(depth);
+            for err in [
+                from_str::<Value>(&input).unwrap_err(),
+                from_str::<IgnoredAny>(&input).unwrap_err(),
+            ] {
+                assert_eq!(
+                    err.to_string(),
+                    "recursion limit exceeded at offset 256",
+                    "depth {depth}"
+                );
+            }
+        }
+
+        let objects = format!("{}1{}", "(a:".repeat(100_000), ")".repeat(100_000));
+        assert!(from_str::<IgnoredAny>(&objects).is_err());
+    }
+
+    #[test]
+    fn test_recursion_limit_in_enums() {
+        #[derive(Deserialize, Debug)]
+        #[allow(dead_code)]
+        enum E {
+            A(Box<E>),
+            B,
+        }
+
+        let input = format!("{}B{}", "(A:".repeat(100_000), ")".repeat(100_000));
+        let err = from_str::<E>(&input).unwrap_err();
+        assert_eq!(err.to_string(), "recursion limit exceeded at offset 384");
     }
 
     #[test]

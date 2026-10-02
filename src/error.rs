@@ -30,6 +30,7 @@ pub(crate) enum ErrorCode {
     InvalidEscape(char),
     InvalidNumber,
     TrailingCharacters,
+    RecursionLimitExceeded,
 }
 
 impl Error {
@@ -71,7 +72,8 @@ impl Error {
             | ErrorCode::UnexpectedChar(_)
             | ErrorCode::InvalidEscape(_)
             | ErrorCode::InvalidNumber
-            | ErrorCode::TrailingCharacters => Category::Syntax,
+            | ErrorCode::TrailingCharacters
+            | ErrorCode::RecursionLimitExceeded => Category::Syntax,
         }
     }
 
@@ -101,6 +103,7 @@ impl Display for ErrorCode {
             ErrorCode::InvalidEscape(c) => write!(f, "invalid escape `!{c}`"),
             ErrorCode::InvalidNumber => f.write_str("invalid number"),
             ErrorCode::TrailingCharacters => f.write_str("trailing characters"),
+            ErrorCode::RecursionLimitExceeded => f.write_str("recursion limit exceeded"),
         }
     }
 }
