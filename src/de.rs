@@ -627,11 +627,11 @@ mod tests {
 
     #[test]
     fn test_primitives() {
-        assert_eq!(from_str::<bool>("!t").unwrap(), true);
-        assert_eq!(from_str::<bool>("!f").unwrap(), false);
+        assert!(from_str::<bool>("!t").unwrap());
+        assert!(!from_str::<bool>("!f").unwrap());
         assert_eq!(from_str::<u64>("42").unwrap(), 42);
         assert_eq!(from_str::<i64>("-7").unwrap(), -7);
-        assert_eq!(from_str::<f64>("3.14").unwrap(), 3.14);
+        assert_eq!(from_str::<f64>("2.5").unwrap().to_bits(), 2.5f64.to_bits());
         assert_eq!(from_str::<String>("hello").unwrap(), "hello");
         assert_eq!(from_str::<String>("'hello world'").unwrap(), "hello world");
         assert_eq!(from_str::<Option<u32>>("!n").unwrap(), None);
@@ -731,13 +731,16 @@ mod tests {
 
     #[test]
     fn test_negative_float() {
-        assert_eq!(from_str::<f64>("-3.14").unwrap(), -3.14);
+        assert_eq!(
+            from_str::<f64>("-2.5").unwrap().to_bits(),
+            (-2.5f64).to_bits()
+        );
     }
 
     #[test]
     fn test_zero() {
         assert_eq!(from_str::<u64>("0").unwrap(), 0);
-        assert_eq!(from_str::<f64>("0.0").unwrap(), 0.0);
+        assert_eq!(from_str::<f64>("0.0").unwrap().to_bits(), 0.0f64.to_bits());
     }
 
     #[test]
@@ -836,7 +839,7 @@ mod tests {
     #[test]
     fn f64_de() {
         let val = "1e20";
-        let val: Value = from_str(&val).unwrap();
+        let val: Value = from_str(val).unwrap();
         dbg!(&val);
     }
 
@@ -976,11 +979,11 @@ mod tests {
 
         // Above u64::MAX there is no integer type left; rison's only number type
         // is a double, so it should degrade to f64 rather than error.
-        assert_bits("18446744073709551616", 18446744073709551616.0);
+        assert_bits("18446744073709551616", 18_446_744_073_709_551_616.0);
 
         // Beyond 2^53 consecutive integers are not representable, so these two
         // distinct literals must land on the same double.
-        assert_bits("9007199254740993", 9007199254740992.0);
+        assert_bits("9007199254740993", 9_007_199_254_740_992.0);
     }
 
     #[test]
@@ -997,11 +1000,11 @@ mod tests {
             ("1e2", Number::from_f64(100.0).unwrap()),
             (
                 "18446744073709551616",
-                Number::from_f64(18446744073709551616.0).unwrap(),
+                Number::from_f64(18_446_744_073_709_551_616.0).unwrap(),
             ),
             (
                 "-9223372036854775809",
-                Number::from_f64(-9223372036854775808.0).unwrap(),
+                Number::from_f64(-9_223_372_036_854_775_808.0).unwrap(),
             ),
         ] {
             assert_eq!(from_str::<Number>(input).unwrap(), expected, "{input:?}");

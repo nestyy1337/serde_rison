@@ -53,8 +53,6 @@ pub type Result<T> = std::result::Result<T, Error>;
 mod test {
     use serde::{Deserialize, Serialize};
 
-    use super::*;
-
     #[derive(Serialize, Deserialize)]
     struct SomeStruct {
         a: i32,

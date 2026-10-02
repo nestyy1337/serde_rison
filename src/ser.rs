@@ -439,7 +439,7 @@ mod tests {
             seq: vec!["a", "b"],
             text: "test with space",
         };
-        let expected = r#"(int:1,seq:!(a,b),text:'test with space')"#;
+        let expected = r"(int:1,seq:!(a,b),text:'test with space')";
         assert_eq!(to_string(&test).unwrap(), expected);
     }
 
@@ -454,19 +454,19 @@ mod tests {
         }
 
         let u = E::Unit;
-        let expected = r#"Unit"#;
+        let expected = r"Unit";
         assert_eq!(to_string(&u).unwrap(), expected);
 
         let n = E::Newtype(1);
-        let expected = r#"(Newtype:1)"#;
+        let expected = r"(Newtype:1)";
         assert_eq!(to_string(&n).unwrap(), expected);
 
         let t = E::Tuple(1, 2);
-        let expected = r#"(Tuple:!(1,2))"#;
+        let expected = r"(Tuple:!(1,2))";
         assert_eq!(to_string(&t).unwrap(), expected);
 
         let s = E::Struct { a: 1 };
-        let expected = r#"(Struct:(a:1))"#;
+        let expected = r"(Struct:(a:1))";
         assert_eq!(to_string(&s).unwrap(), expected);
     }
 
@@ -523,7 +523,7 @@ mod tests {
 
     #[test]
     fn test_float() {
-        assert_eq!(to_string(&3.14f64).unwrap(), "3.14");
+        assert_eq!(to_string(&2.5f64).unwrap(), "2.5");
         assert_eq!(to_string(&-0.5f64).unwrap(), "-0.5");
     }
 

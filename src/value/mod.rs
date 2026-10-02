@@ -84,8 +84,8 @@ mod json_tests {
 
     #[test]
     fn float() {
-        let v: Value = serde_json::json!(3.14).into();
-        assert!(matches!(v, Value::Number(n) if n.as_f64() == Some(3.14)));
+        let v: Value = serde_json::json!(2.5).into();
+        assert!(matches!(v, Value::Number(n) if n.as_f64() == Some(2.5)));
     }
 
     #[test]

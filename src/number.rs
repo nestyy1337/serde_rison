@@ -72,9 +72,9 @@ impl Number {
     #[must_use]
     pub fn as_i64(&self) -> Option<i64> {
         match self.n {
-            N::PosInt(v) if i64::try_from(v).is_ok() => Some(v as i64),
+            N::PosInt(v) => i64::try_from(v).ok(),
             N::NegInt(v) => Some(v),
-            _ => None,
+            N::Float(_) => None,
         }
     }
 
@@ -87,6 +87,10 @@ impl Number {
     }
 
     #[must_use]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "integers above 2^53 round to the nearest f64, as in serde_json"
+    )]
     pub fn as_f64(&self) -> Option<f64> {
         match self.n {
             N::PosInt(v) => Some(v as f64),
@@ -224,37 +228,48 @@ impl<'de> Deserializer<'de> for &'de Number {
     }
 }
 
-macro_rules! impl_from_unsigned {
-    ($($ty:ty),*) => {
+impl From<u64> for Number {
+    fn from(u: u64) -> Self {
+        Number { n: N::PosInt(u) }
+    }
+}
+
+impl From<i64> for Number {
+    fn from(i: i64) -> Self {
+        let n = match u64::try_from(i) {
+            Ok(u) => N::PosInt(u),
+            Err(_) => N::NegInt(i),
+        };
+        Number { n }
+    }
+}
+
+macro_rules! impl_from_via {
+    ($wide:ty: $($ty:ty),*) => {
         $(
             impl From<$ty> for Number {
-                fn from(u: $ty) -> Self {
-                    Number { n: N::PosInt(u as u64) }
+                fn from(v: $ty) -> Self {
+                    <$wide>::from(v).into()
                 }
             }
         )*
     };
 }
 
-macro_rules! impl_from_signed {
-    ($($ty:ty),*) => {
-        $(
-            impl From<$ty> for Number {
-                fn from(i: $ty) -> Self {
-                    let n = if i < 0 {
-                        N::NegInt(i as i64)
-                    } else {
-                        N::PosInt(i as u64)
-                    };
-                    Number { n }
-                }
-            }
-        )*
-    };
+impl_from_via!(u64: u8, u16, u32);
+impl_from_via!(i64: i8, i16, i32);
+
+impl From<usize> for Number {
+    fn from(u: usize) -> Self {
+        (u as u64).into()
+    }
 }
 
-impl_from_unsigned!(u8, u16, u32, u64, usize);
-impl_from_signed!(i8, i16, i32, i64, isize);
+impl From<isize> for Number {
+    fn from(i: isize) -> Self {
+        (i as i64).into()
+    }
+}
 
 #[cfg(feature = "json")]
 impl From<serde_json::Number> for Number {
