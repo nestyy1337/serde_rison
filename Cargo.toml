@@ -2,16 +2,21 @@
 name = "serde_rison"
 version = "0.1.3"
 edition = "2024"
+rust-version = "1.85"
 description = "A serde implementation for the RISON data format"
 license = "MIT"
 repository = "https://github.com/nestyy1337/serde_rison"
 keywords = ["serde", "rison", "serialization", "deserialization"]
 categories = ["encoding", "parser-implementations"]
+include = ["src/**", "README.md", "LICENSE"]
 
 [dependencies]
-serde = { version = "1.0.69", features = ["derive"] }
+serde = "1.0.69"
 serde_json = { version = "1.0.25", optional = true }
 zmij = "1.0.23"
+
+[dev-dependencies]
+serde = { version = "1.0.69", features = ["derive"] }
 
 [features]
 default = []
