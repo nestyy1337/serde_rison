@@ -34,6 +34,7 @@
 
 mod de;
 mod error;
+mod map_key;
 mod number;
 mod ser;
 mod value;

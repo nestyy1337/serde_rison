@@ -1,8 +1,11 @@
 use serde::Deserialize;
 use serde::de::{DeserializeSeed, EnumAccess, MapAccess, SeqAccess, VariantAccess, Visitor};
 
+use std::borrow::Cow;
+
 use crate::Result;
 use crate::error::{Error, ErrorCode};
+use crate::map_key::MapKeyDeserializer;
 
 pub fn from_str<'de, T: Deserialize<'de>>(input: &'de str) -> Result<T> {
     let mut deserializer = Deserializer::new(input);
@@ -171,63 +174,62 @@ impl<'de> Deserializer<'de> {
         Ok(value)
     }
 
+    fn parse_quoted(&mut self) -> Result<Cow<'de, str>> {
+        self.consume('\'')?;
+        let start = self.index;
+
+        // Borrow from the input until the first escape forces a copy.
+        loop {
+            match self.peek() {
+                Some('\'') => {
+                    let s = &self.input[start..self.index];
+                    self.index += 1;
+                    return Ok(Cow::Borrowed(s));
+                }
+                Some('!') => break,
+                Some(c) => self.index += c.len_utf8(),
+                None => return Err(self.error(ErrorCode::EofWhileParsing)),
+            }
+        }
+
+        let mut buf = self.input[start..self.index].to_owned();
+        loop {
+            match self.peek() {
+                Some('\'') => {
+                    self.index += 1;
+                    return Ok(Cow::Owned(buf));
+                }
+                Some('!') => {
+                    self.index += 1;
+                    match self.peek() {
+                        Some(c @ ('!' | '\'')) => {
+                            buf.push(c);
+                            self.index += 1;
+                        }
+                        Some(c) => return Err(self.error(ErrorCode::InvalidEscape(c))),
+                        None => return Err(self.error(ErrorCode::EofWhileParsing)),
+                    }
+                }
+                Some(c) => {
+                    buf.push(c);
+                    self.index += c.len_utf8();
+                }
+                None => return Err(self.error(ErrorCode::EofWhileParsing)),
+            }
+        }
+    }
+
     fn parse_quoted_string<V>(&mut self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        self.consume('\'')?;
-        let start = self.index;
-        let mut has_escapes = false;
-
-        let mut i = self.index;
-        while i < self.input.len() {
-            match self.input.as_bytes()[i] {
-                b'\'' => break,
-                b'!' => {
-                    has_escapes = true;
-                    i += 2;
-                }
-                _ => i += 1,
-            }
-        }
-
-        if has_escapes {
-            let mut buf = String::new();
-            loop {
-                match self.peek() {
-                    Some('\'') => break,
-                    Some('!') => {
-                        self.index += 1;
-                        match self.peek() {
-                            Some(c @ ('!' | '\'')) => {
-                                buf.push(c);
-                                self.index += 1;
-                            }
-                            Some(c) => return Err(self.error(ErrorCode::InvalidEscape(c))),
-                            None => return Err(self.error(ErrorCode::EofWhileParsing)),
-                        }
-                    }
-                    Some(c) => {
-                        buf.push(c);
-                        self.index += c.len_utf8();
-                    }
-                    None => return Err(self.error(ErrorCode::EofWhileParsing)),
-                }
-            }
-            self.consume('\'')?;
-            visitor.visit_string(buf)
-        } else {
-            self.index = i.min(self.input.len());
-            let s = &self.input[start..self.index];
-            self.consume('\'')?;
-            visitor.visit_borrowed_str(s)
+        match self.parse_quoted()? {
+            Cow::Borrowed(s) => visitor.visit_borrowed_str(s),
+            Cow::Owned(s) => visitor.visit_string(s),
         }
     }
 
-    fn parse_unquoted_string<V>(&mut self, visitor: V) -> Result<V::Value>
-    where
-        V: Visitor<'de>,
-    {
+    fn parse_unquoted(&mut self) -> Result<&'de str> {
         let start = self.index;
         while let Some(c) = self
             .peek()
@@ -238,7 +240,19 @@ impl<'de> Deserializer<'de> {
         if self.index == start {
             return Err(self.peek_error());
         }
-        visitor.visit_borrowed_str(&self.input[start..self.index])
+        Ok(&self.input[start..self.index])
+    }
+
+    /// Object keys are strings. Unquoted keys may look like numbers, as in
+    /// `(1:a)`, and are still read as text.
+    fn parse_key(&mut self) -> Result<Cow<'de, str>> {
+        match self.peek() {
+            Some('\'') => self.parse_quoted(),
+            Some(c) if c.is_ascii_digit() || c == '-' => match self.scan_number()? {
+                NumberToken::Integer(token) | NumberToken::Float(token) => Ok(Cow::Borrowed(token)),
+            },
+            _ => self.parse_unquoted().map(Cow::Borrowed),
+        }
     }
 
     fn parse_bang<V>(&mut self, visitor: V) -> Result<V::Value>
@@ -346,7 +360,7 @@ impl<'de> serde::de::Deserializer<'de> for &mut Deserializer<'de> {
             Some('!') => self.parse_bang(visitor),
             Some('\'') => self.parse_quoted_string(visitor),
             Some(c) if c.is_ascii_digit() || c == '-' => self.parse_number(visitor),
-            Some(_) => self.parse_unquoted_string(visitor),
+            Some(_) => visitor.visit_borrowed_str(self.parse_unquoted()?),
             None => Err(self.error(ErrorCode::EofWhileParsing)),
         }
     }
@@ -563,7 +577,8 @@ impl<'de> MapAccess<'de> for RisonMapAccess<'_, 'de> {
             self.de.consume(',')?;
         }
         self.first = false;
-        seed.deserialize(&mut *self.de).map(Some)
+        let key = self.de.parse_key()?;
+        seed.deserialize(MapKeyDeserializer::new(key)).map(Some)
     }
 
     fn next_value_seed<V>(&mut self, seed: V) -> Result<V::Value>
@@ -1251,6 +1266,45 @@ mod tests {
         let input = format!("{}B{}", "(A:".repeat(100_000), ")".repeat(100_000));
         let err = from_str::<E>(&input).unwrap_err();
         assert_eq!(err.to_string(), "recursion limit exceeded at offset 384");
+    }
+
+    #[test]
+    fn test_object_keys_are_strings() {
+        use std::collections::{BTreeMap, HashMap};
+
+        let value: Value = from_str("(1:a,-2:b,1.5:c,'x y':d,'it!'s':e)").unwrap();
+        let Value::Object(map) = value else {
+            panic!("expected object")
+        };
+        let keys: Vec<&str> = map.keys().map(String::as_str).collect();
+        assert_eq!(keys, ["-2", "1", "1.5", "it's", "x y"]);
+
+        let map: HashMap<String, u32> = from_str("(1:2)").unwrap();
+        assert_eq!(map["1"], 2);
+
+        let map: BTreeMap<i64, u32> = from_str("(1:2,-3:4,'5':6)").unwrap();
+        assert_eq!(map, BTreeMap::from([(1, 2), (-3, 4), (5, 6)]));
+
+        let map: BTreeMap<bool, u32> = from_str("(true:1,false:0)").unwrap();
+        assert_eq!(map, BTreeMap::from([(true, 1), (false, 0)]));
+
+        assert!(from_str::<BTreeMap<u32, u32>>("(a:1)").is_err());
+        assert!(from_str::<BTreeMap<u8, u32>>("(300:1)").is_err());
+        assert!(from_str::<BTreeMap<String, u32>>("(!t:1)").is_err());
+    }
+
+    #[test]
+    fn test_object_keys_agree_with_value_path() {
+        use std::collections::BTreeMap;
+
+        let input = "(1:2,-3:4)";
+        let direct: BTreeMap<i32, u32> = from_str(input).unwrap();
+        let value: Value = from_str(input).unwrap();
+        assert_eq!(
+            crate::from_value::<BTreeMap<i32, u32>>(value.clone()).unwrap(),
+            direct
+        );
+        assert_eq!(BTreeMap::<i32, u32>::deserialize(&value).unwrap(), direct);
     }
 
     #[test]

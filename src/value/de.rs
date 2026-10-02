@@ -8,9 +8,9 @@ use serde::de::{
     self, Deserialize, DeserializeSeed, EnumAccess, Expected, IntoDeserializer, MapAccess,
     SeqAccess, Unexpected, VariantAccess, Visitor,
 };
-use serde::forward_to_deserialize_any;
 
 use crate::error::Error;
+use crate::map_key::MapKeyDeserializer;
 use crate::number::Number;
 use crate::value::Value;
 
@@ -753,9 +753,7 @@ impl<'de> MapAccess<'de> for MapDeserializer {
         match self.iter.next() {
             Some((key, value)) => {
                 self.value = Some(value);
-                let key_de = MapKeyDeserializer {
-                    key: Cow::Owned(key),
-                };
+                let key_de = MapKeyDeserializer::new(Cow::Owned(key));
                 seed.deserialize(key_de).map(Some)
             }
             None => Ok(None),
@@ -804,9 +802,7 @@ impl<'de> MapAccess<'de> for MapRefDeserializer<'de> {
         match self.iter.next() {
             Some((key, value)) => {
                 self.value = Some(value);
-                let key_de = MapKeyDeserializer {
-                    key: Cow::Borrowed(key.as_str()),
-                };
+                let key_de = MapKeyDeserializer::new(Cow::Borrowed(key.as_str()));
                 seed.deserialize(key_de).map(Some)
             }
             None => Ok(None),
@@ -828,75 +824,6 @@ impl<'de> MapAccess<'de> for MapRefDeserializer<'de> {
             (lower, Some(upper)) if lower == upper => Some(upper),
             _ => None,
         }
-    }
-}
-
-struct MapKeyDeserializer<'de> {
-    key: Cow<'de, str>,
-}
-
-impl<'de> serde::Deserializer<'de> for MapKeyDeserializer<'de> {
-    type Error = Error;
-
-    fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Error>
-    where
-        V: Visitor<'de>,
-    {
-        BorrowedCowStrDeserializer::new(self.key).deserialize_any(visitor)
-    }
-
-    fn deserialize_bool<V>(self, visitor: V) -> Result<V::Value, Error>
-    where
-        V: Visitor<'de>,
-    {
-        if self.key == "true" {
-            visitor.visit_bool(true)
-        } else if self.key == "false" {
-            visitor.visit_bool(false)
-        } else {
-            Err(de::Error::invalid_type(
-                Unexpected::Str(&self.key),
-                &visitor,
-            ))
-        }
-    }
-
-    fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, Error>
-    where
-        V: Visitor<'de>,
-    {
-        visitor.visit_some(self)
-    }
-
-    fn deserialize_newtype_struct<V>(
-        self,
-        _name: &'static str,
-        visitor: V,
-    ) -> Result<V::Value, Error>
-    where
-        V: Visitor<'de>,
-    {
-        visitor.visit_newtype_struct(self)
-    }
-
-    fn deserialize_enum<V>(
-        self,
-        name: &'static str,
-        variants: &'static [&'static str],
-        visitor: V,
-    ) -> Result<V::Value, Error>
-    where
-        V: Visitor<'de>,
-    {
-        self.key
-            .into_deserializer()
-            .deserialize_enum(name, variants, visitor)
-    }
-
-    forward_to_deserialize_any! {
-        i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
-        bytes byte_buf unit unit_struct seq tuple tuple_struct
-        map struct identifier ignored_any
     }
 }
 
@@ -1079,105 +1006,6 @@ impl<'de> VariantAccess<'de> for VariantRefDeserializer<'de> {
                 &"struct variant",
             )),
         }
-    }
-}
-
-struct BorrowedCowStrDeserializer<'de> {
-    value: Cow<'de, str>,
-}
-
-impl<'de> BorrowedCowStrDeserializer<'de> {
-    fn new(value: Cow<'de, str>) -> Self {
-        BorrowedCowStrDeserializer { value }
-    }
-}
-
-impl<'de> de::Deserializer<'de> for BorrowedCowStrDeserializer<'de> {
-    type Error = Error;
-
-    fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Error>
-    where
-        V: de::Visitor<'de>,
-    {
-        match self.value {
-            Cow::Borrowed(string) => visitor.visit_borrowed_str(string),
-            Cow::Owned(string) => visitor.visit_string(string),
-        }
-    }
-
-    fn deserialize_enum<V>(
-        self,
-        _name: &str,
-        _variants: &'static [&'static str],
-        visitor: V,
-    ) -> Result<V::Value, Error>
-    where
-        V: de::Visitor<'de>,
-    {
-        visitor.visit_enum(self)
-    }
-
-    forward_to_deserialize_any! {
-        bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
-        bytes byte_buf option unit unit_struct newtype_struct seq tuple
-        tuple_struct map struct identifier ignored_any
-    }
-}
-
-impl<'de> de::EnumAccess<'de> for BorrowedCowStrDeserializer<'de> {
-    type Error = Error;
-    type Variant = UnitOnly;
-
-    fn variant_seed<T>(self, seed: T) -> Result<(T::Value, Self::Variant), Error>
-    where
-        T: de::DeserializeSeed<'de>,
-    {
-        let value = seed.deserialize(self)?;
-        Ok((value, UnitOnly))
-    }
-}
-
-struct UnitOnly;
-
-impl<'de> de::VariantAccess<'de> for UnitOnly {
-    type Error = Error;
-
-    fn unit_variant(self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn newtype_variant_seed<T>(self, _seed: T) -> Result<T::Value, Error>
-    where
-        T: de::DeserializeSeed<'de>,
-    {
-        Err(de::Error::invalid_type(
-            Unexpected::UnitVariant,
-            &"newtype variant",
-        ))
-    }
-
-    fn tuple_variant<V>(self, _len: usize, _visitor: V) -> Result<V::Value, Error>
-    where
-        V: de::Visitor<'de>,
-    {
-        Err(de::Error::invalid_type(
-            Unexpected::UnitVariant,
-            &"tuple variant",
-        ))
-    }
-
-    fn struct_variant<V>(
-        self,
-        _fields: &'static [&'static str],
-        _visitor: V,
-    ) -> Result<V::Value, Error>
-    where
-        V: de::Visitor<'de>,
-    {
-        Err(de::Error::invalid_type(
-            Unexpected::UnitVariant,
-            &"struct variant",
-        ))
     }
 }
 
