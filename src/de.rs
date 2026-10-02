@@ -837,10 +837,9 @@ mod tests {
     }
 
     #[test]
-    fn f64_de() {
-        let val = "1e20";
-        let val: Value = from_str(val).unwrap();
-        dbg!(&val);
+    fn test_exponent_into_value() {
+        let val: Value = from_str("1e20").unwrap();
+        assert_eq!(val, Value::Number(crate::Number::from_f64(1e20).unwrap()));
     }
 
     // Floats are compared by bit pattern, not by value: `-0.0 == 0.0` is true
@@ -1126,10 +1125,8 @@ mod tests {
     }
 
     #[test]
-    fn lossy() {
-        let string = "99.99999999999999";
-        let rison: f32 = from_str(string).unwrap();
-
-        dbg!(string, rison);
+    fn test_f32_rounds_to_nearest() {
+        let rison: f32 = from_str("99.99999999999999").unwrap();
+        assert_eq!(rison.to_bits(), 100.0f32.to_bits());
     }
 }

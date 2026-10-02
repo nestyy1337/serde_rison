@@ -68,7 +68,7 @@ mod test {
             c: vec![1, 2, 3],
         };
         let string = crate::to_string(&some_struct).unwrap();
-        println!("{string}");
+        assert_eq!(string, "(a:1,b:'!!!!',c:!(1,2,3))");
     }
 
     #[test]
