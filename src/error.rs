@@ -31,6 +31,7 @@ pub(crate) enum ErrorCode {
     InvalidNumber,
     TrailingCharacters,
     RecursionLimitExceeded,
+    KeyMustBeAString,
 }
 
 impl Error {
@@ -66,7 +67,7 @@ impl Error {
     #[must_use]
     pub fn classify(&self) -> Category {
         match self.inner.code {
-            ErrorCode::Message(_) => Category::Data,
+            ErrorCode::Message(_) | ErrorCode::KeyMustBeAString => Category::Data,
             ErrorCode::EofWhileParsing => Category::Eof,
             ErrorCode::ExpectedChar(_)
             | ErrorCode::UnexpectedChar(_)
@@ -104,6 +105,9 @@ impl Display for ErrorCode {
             ErrorCode::InvalidNumber => f.write_str("invalid number"),
             ErrorCode::TrailingCharacters => f.write_str("trailing characters"),
             ErrorCode::RecursionLimitExceeded => f.write_str("recursion limit exceeded"),
+            ErrorCode::KeyMustBeAString => {
+                f.write_str("map key must be a string, integer, char or bool")
+            }
         }
     }
 }
