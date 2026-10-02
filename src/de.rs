@@ -305,6 +305,9 @@ impl<'de> Deserializer<'de> {
         let value: f64 = token
             .parse()
             .map_err(|_| Error::syntax(ErrorCode::InvalidNumber, start))?;
+        if !value.is_finite() {
+            return Err(Error::syntax(ErrorCode::NumberOutOfRange, start));
+        }
         visitor.visit_f64(value)
     }
 }
@@ -343,6 +346,9 @@ macro_rules! deserialize_float {
             let value: $type = token
                 .parse()
                 .map_err(|_| Error::syntax(ErrorCode::InvalidNumber, start))?;
+            if !value.is_finite() {
+                return Err(Error::syntax(ErrorCode::NumberOutOfRange, start));
+            }
             visitor.$visit_method(value)
         }
     };
@@ -1124,11 +1130,37 @@ mod tests {
     }
 
     #[test]
-    fn test_float_overflow_and_underflow() {
-        // Both fail silently in `str::parse`. Decide deliberately whether rison
-        // should propagate that or reject the literal.
+    fn test_float_underflow_rounds_to_zero() {
         assert_bits("1e-400", 0.0);
-        assert_bits("1e999", f64::INFINITY);
+        assert_bits("-1e-400", -0.0);
+        assert_eq!(
+            from_str::<f32>("1e-50").unwrap().to_bits(),
+            0.0f32.to_bits()
+        );
+    }
+
+    #[test]
+    fn test_float_overflow_is_an_error() {
+        use crate::Number;
+
+        let nines = format!("{}.0", "9".repeat(400));
+        let long_integer = "9".repeat(400);
+        for input in ["1e999", "-1e999", nines.as_str(), long_integer.as_str()] {
+            for err in [
+                from_str::<f64>(input).unwrap_err(),
+                from_str::<Number>(input).unwrap_err(),
+                from_str::<Value>(input).unwrap_err(),
+            ] {
+                assert_eq!(
+                    err.to_string(),
+                    "number out of range at offset 0",
+                    "{input:?}"
+                );
+                assert!(err.is_data());
+            }
+        }
+        assert!(from_str::<f32>("1e39").is_err());
+        assert!(from_str::<Value>("(a:!(1,1e999))").is_err());
     }
 
     #[test]

@@ -29,6 +29,7 @@ pub(crate) enum ErrorCode {
     UnexpectedChar(char),
     InvalidEscape(char),
     InvalidNumber,
+    NumberOutOfRange,
     TrailingCharacters,
     RecursionLimitExceeded,
     KeyMustBeAString,
@@ -67,7 +68,9 @@ impl Error {
     #[must_use]
     pub fn classify(&self) -> Category {
         match self.inner.code {
-            ErrorCode::Message(_) | ErrorCode::KeyMustBeAString => Category::Data,
+            ErrorCode::Message(_) | ErrorCode::KeyMustBeAString | ErrorCode::NumberOutOfRange => {
+                Category::Data
+            }
             ErrorCode::EofWhileParsing => Category::Eof,
             ErrorCode::ExpectedChar(_)
             | ErrorCode::UnexpectedChar(_)
@@ -103,6 +106,7 @@ impl Display for ErrorCode {
             ErrorCode::UnexpectedChar(c) => write!(f, "unexpected character `{c}`"),
             ErrorCode::InvalidEscape(c) => write!(f, "invalid escape `!{c}`"),
             ErrorCode::InvalidNumber => f.write_str("invalid number"),
+            ErrorCode::NumberOutOfRange => f.write_str("number out of range"),
             ErrorCode::TrailingCharacters => f.write_str("trailing characters"),
             ErrorCode::RecursionLimitExceeded => f.write_str("recursion limit exceeded"),
             ErrorCode::KeyMustBeAString => {
