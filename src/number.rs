@@ -4,6 +4,8 @@ use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, forward_to_deserialize_any};
 
 use crate::error::Error;
+#[cfg(feature = "json")]
+use crate::error::ErrorCode;
 
 /// Represents a RISON number, whether integer or floating point.
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -272,16 +274,20 @@ impl From<isize> for Number {
 }
 
 #[cfg(feature = "json")]
-impl From<serde_json::Number> for Number {
-    fn from(n: serde_json::Number) -> Self {
+impl TryFrom<serde_json::Number> for Number {
+    type Error = Error;
+
+    /// Fails for numbers outside the f64 range, which serde_json can hold
+    /// when its `arbitrary_precision` feature is enabled.
+    fn try_from(n: serde_json::Number) -> Result<Self, Error> {
         if let Some(u) = n.as_u64() {
-            u.into()
+            Ok(u.into())
         } else if let Some(i) = n.as_i64() {
-            i.into()
-        } else if let Some(f) = n.as_f64() {
-            Number::from_f64(f).expect("serde_json::Number should always be finite")
+            Ok(i.into())
         } else {
-            unreachable!("serde_json::Number is always one of u64, i64, or f64")
+            n.as_f64()
+                .and_then(Number::from_f64)
+                .ok_or_else(|| Error::data(ErrorCode::NumberOutOfRange))
         }
     }
 }
