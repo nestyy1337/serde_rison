@@ -1,5 +1,7 @@
 use serde::Deserialize;
-use serde::de::{DeserializeSeed, EnumAccess, MapAccess, SeqAccess, VariantAccess, Visitor};
+use serde::de::{
+    DeserializeSeed, EnumAccess, MapAccess, SeqAccess, Unexpected, VariantAccess, Visitor,
+};
 
 use std::borrow::Cow;
 
@@ -312,6 +314,34 @@ impl<'de> Deserializer<'de> {
     }
 }
 
+/// 128-bit targets parse integer tokens at full width instead of going
+/// through u64/i64/f64. Float tokens are handed over as f64 for the visitor
+/// to reject.
+macro_rules! deserialize_wide_integer {
+    ($de_method:ident, $type:ident, $visit_method:ident) => {
+        fn $de_method<V>(self, visitor: V) -> Result<V::Value>
+        where
+            V: Visitor<'de>,
+        {
+            if !self.peek().is_some_and(|c| c.is_ascii_digit() || c == '-') {
+                return self.deserialize_any(visitor);
+            }
+
+            let start = self.index;
+            match self.scan_number()? {
+                NumberToken::Integer(token) => match token.parse::<$type>() {
+                    Ok(value) => visitor.$visit_method(value),
+                    Err(_) => Err(Error::syntax(ErrorCode::NumberOutOfRange, start)),
+                },
+                NumberToken::Float(_) => {
+                    self.index = start;
+                    self.parse_number(visitor)
+                }
+            }
+        }
+    };
+}
+
 enum NumberToken<'de> {
     Integer(&'de str),
     Float(&'de str),
@@ -389,6 +419,9 @@ impl<'de> serde::de::Deserializer<'de> for &mut Deserializer<'de> {
 
     deserialize_float!(deserialize_f32, f32, visit_f32);
     deserialize_float!(deserialize_f64, f64, visit_f64);
+
+    deserialize_wide_integer!(deserialize_i128, i128, visit_i128);
+    deserialize_wide_integer!(deserialize_u128, u128, visit_u128);
 
     fn deserialize_char<V>(self, visitor: V) -> Result<V::Value>
     where
@@ -517,12 +550,18 @@ impl<'de> serde::de::Deserializer<'de> for &mut Deserializer<'de> {
             Some('(') => {
                 self.descend()?;
                 self.consume('(')?;
-                let value = visitor.visit_enum(RisonEnumAccess { de: self })?;
+                let value = visitor.visit_enum(RisonEnumAccess {
+                    de: self,
+                    wrapped: true,
+                })?;
                 self.consume(')')?;
                 self.ascend();
                 Ok(value)
             }
-            _ => visitor.visit_enum(RisonEnumAccess { de: self }),
+            _ => visitor.visit_enum(RisonEnumAccess {
+                de: self,
+                wrapped: false,
+            }),
         }
     }
 
@@ -596,8 +635,24 @@ impl<'de> MapAccess<'de> for RisonMapAccess<'_, 'de> {
     }
 }
 
+/// A unit variant is a bare string, `Unit`. Every other variant is wrapped in
+/// a single-entry object, `(Variant:value)`.
 struct RisonEnumAccess<'a, 'de> {
     de: &'a mut Deserializer<'de>,
+    wrapped: bool,
+}
+
+impl RisonEnumAccess<'_, '_> {
+    fn expect_value(&mut self, expected: &'static str) -> Result<()> {
+        if self.wrapped {
+            self.de.consume(':')
+        } else {
+            Err(serde::de::Error::invalid_type(
+                Unexpected::UnitVariant,
+                &expected,
+            ))
+        }
+    }
 }
 
 impl<'de> EnumAccess<'de> for RisonEnumAccess<'_, 'de> {
@@ -608,7 +663,12 @@ impl<'de> EnumAccess<'de> for RisonEnumAccess<'_, 'de> {
     where
         V: DeserializeSeed<'de>,
     {
-        let val = seed.deserialize(&mut *self.de)?;
+        let val = if self.wrapped {
+            let key = self.de.parse_key()?;
+            seed.deserialize(MapKeyDeserializer::new(key))?
+        } else {
+            seed.deserialize(&mut *self.de)?
+        };
         Ok((val, self))
     }
 }
@@ -616,31 +676,36 @@ impl<'de> EnumAccess<'de> for RisonEnumAccess<'_, 'de> {
 impl<'de> VariantAccess<'de> for RisonEnumAccess<'_, 'de> {
     type Error = Error;
 
-    fn unit_variant(self) -> Result<()> {
-        Ok(())
+    fn unit_variant(mut self) -> Result<()> {
+        if self.wrapped {
+            self.expect_value("unit variant")?;
+            <()>::deserialize(&mut *self.de)
+        } else {
+            Ok(())
+        }
     }
 
-    fn newtype_variant_seed<T>(self, seed: T) -> Result<T::Value>
+    fn newtype_variant_seed<T>(mut self, seed: T) -> Result<T::Value>
     where
         T: DeserializeSeed<'de>,
     {
-        self.de.consume(':')?;
+        self.expect_value("newtype variant")?;
         seed.deserialize(&mut *self.de)
     }
 
-    fn tuple_variant<V>(self, _len: usize, visitor: V) -> Result<V::Value>
+    fn tuple_variant<V>(mut self, _len: usize, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        self.de.consume(':')?;
+        self.expect_value("tuple variant")?;
         serde::de::Deserializer::deserialize_seq(&mut *self.de, visitor)
     }
 
-    fn struct_variant<V>(self, _fields: &'static [&'static str], visitor: V) -> Result<V::Value>
+    fn struct_variant<V>(mut self, _fields: &'static [&'static str], visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        self.de.consume(':')?;
+        self.expect_value("struct variant")?;
         serde::de::Deserializer::deserialize_map(&mut *self.de, visitor)
     }
 }
@@ -1337,6 +1402,113 @@ mod tests {
             direct
         );
         assert_eq!(BTreeMap::<i32, u32>::deserialize(&value).unwrap(), direct);
+    }
+
+    #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    enum Shape {
+        Unit,
+        Empty(),
+        Newtype(u32),
+        Tuple(u32, u32),
+        Struct { a: u32 },
+    }
+
+    /// Deserializes `input` directly, through an owned `Value` and through a
+    /// borrowed `&Value`.
+    fn all_paths<T>(input: &str) -> [std::result::Result<T, String>; 3]
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let value = from_str::<Value>(input).map_err(|e| e.to_string());
+        [
+            from_str::<T>(input).map_err(|e| e.to_string()),
+            value
+                .clone()
+                .and_then(|v| crate::from_value::<T>(v).map_err(|e| e.to_string())),
+            value.and_then(|v| T::deserialize(&v).map_err(|e| e.to_string())),
+        ]
+    }
+
+    #[test]
+    fn test_enum_paths_agree() {
+        for (input, expected) in [
+            ("Unit", Shape::Unit),
+            ("'Unit'", Shape::Unit),
+            ("(Unit:!n)", Shape::Unit),
+            ("(Empty:!())", Shape::Empty()),
+            ("(Newtype:1)", Shape::Newtype(1)),
+            ("('Newtype':1)", Shape::Newtype(1)),
+            ("(Tuple:!(1,2))", Shape::Tuple(1, 2)),
+            ("(Struct:(a:1))", Shape::Struct { a: 1 }),
+        ] {
+            for (path, got) in all_paths::<Shape>(input).into_iter().enumerate() {
+                assert_eq!(got.unwrap(), expected, "{input:?} via path {path}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_enum_rejects_malformed() {
+        for input in [
+            "Newtype",
+            "Newtype:1",
+            "(Unit)",
+            "(Unit:1)",
+            "(Newtype)",
+            "(Newtype:1,Unit:!n)",
+            "()",
+            "Missing",
+            "1",
+            "!n",
+        ] {
+            for (path, got) in all_paths::<Shape>(input).into_iter().enumerate() {
+                assert!(got.is_err(), "{input:?} via path {path} gave {got:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_enum_roundtrip_all_shapes() {
+        for shape in [
+            Shape::Unit,
+            Shape::Empty(),
+            Shape::Newtype(7),
+            Shape::Tuple(1, 2),
+            Shape::Struct { a: 3 },
+        ] {
+            let rison = crate::to_string(&shape).unwrap();
+            for got in all_paths::<Shape>(&rison) {
+                assert_eq!(got.unwrap(), shape, "{rison:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_128_bit_integers() {
+        for value in [i128::MIN, -1, 0, i128::from(u64::MAX) + 1, i128::MAX] {
+            let rison = crate::to_string(&value).unwrap();
+            assert_eq!(rison, value.to_string());
+            assert_eq!(from_str::<i128>(&rison).unwrap(), value);
+        }
+        for value in [0, u128::from(u64::MAX) + 1, u128::MAX] {
+            let rison = crate::to_string(&value).unwrap();
+            assert_eq!(from_str::<u128>(&rison).unwrap(), value);
+        }
+        for input in ["-1", "1", "18446744073709551615"] {
+            let [direct, owned, borrowed] = all_paths::<i128>(input);
+            assert_eq!(direct.unwrap(), input.parse::<i128>().unwrap());
+            assert_eq!(owned.unwrap(), input.parse::<i128>().unwrap());
+            assert_eq!(borrowed.unwrap(), input.parse::<i128>().unwrap());
+        }
+
+        assert!(from_str::<u128>("-1").is_err());
+        assert!(from_str::<i128>("1.5").is_err());
+        assert!(from_str::<i128>("x").is_err());
+        let too_big = format!("{}0", u128::MAX);
+        assert_eq!(
+            from_str::<u128>(&too_big).unwrap_err().to_string(),
+            "number out of range at offset 0"
+        );
     }
 
     #[test]

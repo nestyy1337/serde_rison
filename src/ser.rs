@@ -87,6 +87,16 @@ impl ser::Serializer for &mut Serializer {
         Ok(())
     }
 
+    fn serialize_i128(self, v: i128) -> Result<()> {
+        self.output += &v.to_string();
+        Ok(())
+    }
+
+    fn serialize_u128(self, v: u128) -> Result<()> {
+        self.output += &v.to_string();
+        Ok(())
+    }
+
     fn serialize_f32(self, v: f32) -> Result<()> {
         match v.classify() {
             FpCategory::Nan | FpCategory::Infinite => {
