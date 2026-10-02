@@ -40,7 +40,7 @@ mod value;
 
 pub use de::Deserializer;
 pub use de::from_str;
-pub use error::Error;
+pub use error::{Category, Error};
 pub use number::Number;
 pub use ser::Serializer;
 pub use ser::to_string;

@@ -1,12 +1,12 @@
 use serde::Deserialize;
 use serde::de::{DeserializeSeed, EnumAccess, MapAccess, SeqAccess, VariantAccess, Visitor};
 
-use crate::Error;
 use crate::Result;
+use crate::error::{Error, ErrorCode};
 
 pub fn from_str<'de, T: Deserialize<'de>>(input: &'de str) -> Result<T> {
     let mut deserializer = Deserializer::new(input);
-    let t = T::deserialize(&mut deserializer)?;
+    let t = T::deserialize(&mut deserializer).map_err(|e| e.fix_offset(deserializer.index))?;
     deserializer.end()?;
     Ok(t)
 }
@@ -26,25 +26,33 @@ impl<'de> Deserializer<'de> {
         self.input[self.index..].chars().next()
     }
 
-    fn next(&mut self) -> Option<char> {
-        let ch = self.peek()?;
-        self.index += ch.len_utf8();
-        Some(ch)
+    fn error(&self, code: ErrorCode) -> Error {
+        Error::syntax(code, self.index)
+    }
+
+    /// Error describing whatever is at the cursor.
+    fn peek_error(&self) -> Error {
+        match self.peek() {
+            Some(c) => self.error(ErrorCode::UnexpectedChar(c)),
+            None => self.error(ErrorCode::EofWhileParsing),
+        }
     }
 
     fn consume(&mut self, expected: char) -> Result<()> {
-        match self.next() {
-            Some(c) if c == expected => Ok(()),
-            Some(c) => Err(Error::UnexpectedCharacter(c)),
-            None => Err(Error::UnexpectedEndOfInput),
+        match self.peek() {
+            Some(c) if c == expected => {
+                self.index += c.len_utf8();
+                Ok(())
+            }
+            Some(_) => Err(self.error(ErrorCode::ExpectedChar(expected))),
+            None => Err(self.error(ErrorCode::EofWhileParsing)),
         }
     }
 
     fn end(&self) -> Result<()> {
-        if self.index == self.input.len() {
-            Ok(())
-        } else {
-            Err(Error::UnexpectedCharacter(self.peek().unwrap()))
+        match self.peek() {
+            None => Ok(()),
+            Some(_) => Err(self.error(ErrorCode::TrailingCharacters)),
         }
     }
 
@@ -62,9 +70,7 @@ impl<'de> Deserializer<'de> {
         }
 
         if self.index == integer_start {
-            return Err(Error::InvalidNumber(
-                self.input[start..self.index].to_string(),
-            ));
+            return Err(self.error(ErrorCode::InvalidNumber));
         }
 
         let mut is_float = false;
@@ -78,9 +84,7 @@ impl<'de> Deserializer<'de> {
             }
 
             if self.index == fraction_start {
-                return Err(Error::InvalidNumber(
-                    self.input[start..self.index].to_string(),
-                ));
+                return Err(self.error(ErrorCode::InvalidNumber));
             }
         }
 
@@ -98,15 +102,13 @@ impl<'de> Deserializer<'de> {
             }
 
             if self.index == exponent_start {
-                return Err(Error::InvalidNumber(
-                    self.input[start..self.index].to_string(),
-                ));
+                return Err(self.error(ErrorCode::InvalidNumber));
             }
         }
 
         match self.peek() {
             None | Some(',' | ')' | ':') => {}
-            Some(c) => return Err(Error::UnexpectedCharacter(c)),
+            Some(_) => return Err(self.error(ErrorCode::InvalidNumber)),
         }
 
         let token = &self.input[start..self.index];
@@ -170,24 +172,27 @@ impl<'de> Deserializer<'de> {
                 match self.peek() {
                     Some('\'') => break,
                     Some('!') => {
-                        self.index += 1; // skip '!'
-                        match self.next() {
-                            Some(c @ ('!' | '\'')) => buf.push(c),
-                            Some(c) => return Err(Error::UnexpectedCharacter(c)),
-                            None => return Err(Error::UnexpectedEndOfInput),
+                        self.index += 1;
+                        match self.peek() {
+                            Some(c @ ('!' | '\'')) => {
+                                buf.push(c);
+                                self.index += 1;
+                            }
+                            Some(c) => return Err(self.error(ErrorCode::InvalidEscape(c))),
+                            None => return Err(self.error(ErrorCode::EofWhileParsing)),
                         }
                     }
                     Some(c) => {
                         buf.push(c);
                         self.index += c.len_utf8();
                     }
-                    None => return Err(Error::UnexpectedEndOfInput),
+                    None => return Err(self.error(ErrorCode::EofWhileParsing)),
                 }
             }
             self.consume('\'')?;
             visitor.visit_string(buf)
         } else {
-            self.index = i;
+            self.index = i.min(self.input.len());
             let s = &self.input[start..self.index];
             self.consume('\'')?;
             visitor.visit_borrowed_str(s)
@@ -199,14 +204,14 @@ impl<'de> Deserializer<'de> {
         V: Visitor<'de>,
     {
         let start = self.index;
-        while self
+        while let Some(c) = self
             .peek()
-            .is_some_and(|c| !matches!(c, '(' | ')' | ',' | ':' | '!' | '\''))
+            .filter(|c| !matches!(c, '(' | ')' | ',' | ':' | '!' | '\''))
         {
-            self.index += self.peek().unwrap().len_utf8();
+            self.index += c.len_utf8();
         }
         if self.index == start {
-            return Err(Error::UnexpectedEndOfInput);
+            return Err(self.peek_error());
         }
         visitor.visit_borrowed_str(&self.input[start..self.index])
     }
@@ -231,8 +236,10 @@ impl<'de> Deserializer<'de> {
                 self.index += 2;
                 visitor.visit_unit()
             }
-            Some(c) => Err(Error::UnexpectedCharacter(c)),
-            None => Err(Error::UnexpectedEndOfInput),
+            _ => {
+                self.index += 1;
+                Err(self.peek_error())
+            }
         }
     }
 
@@ -240,6 +247,7 @@ impl<'de> Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
+        let start = self.index;
         let token = match self.scan_number()? {
             NumberToken::Integer(token) => {
                 if let Ok(value) = token.parse::<u64>() {
@@ -257,7 +265,7 @@ impl<'de> Deserializer<'de> {
 
         let value: f64 = token
             .parse()
-            .map_err(|_| Error::InvalidNumber(token.to_string()))?;
+            .map_err(|_| Error::syntax(ErrorCode::InvalidNumber, start))?;
         visitor.visit_f64(value)
     }
 }
@@ -273,7 +281,7 @@ macro_rules! deserialize_number {
         where
             V: Visitor<'de>,
         {
-            self.parse_number(visitor)
+            self.deserialize_any(visitor)
         }
     };
 }
@@ -284,13 +292,18 @@ macro_rules! deserialize_float {
         where
             V: Visitor<'de>,
         {
+            if !self.peek().is_some_and(|c| c.is_ascii_digit() || c == '-') {
+                return self.deserialize_any(visitor);
+            }
+
+            let start = self.index;
             let token = match self.scan_number()? {
                 NumberToken::Integer(token) | NumberToken::Float(token) => token,
             };
 
             let value: $type = token
                 .parse()
-                .map_err(|_| Error::InvalidNumber(token.to_string()))?;
+                .map_err(|_| Error::syntax(ErrorCode::InvalidNumber, start))?;
             visitor.$visit_method(value)
         }
     };
@@ -309,7 +322,7 @@ impl<'de> serde::de::Deserializer<'de> for &mut Deserializer<'de> {
             Some('\'') => self.parse_quoted_string(visitor),
             Some(c) if c.is_ascii_digit() || c == '-' => self.parse_number(visitor),
             Some(_) => self.parse_unquoted_string(visitor),
-            None => Err(Error::UnexpectedEndOfInput),
+            None => Err(self.error(ErrorCode::EofWhileParsing)),
         }
     }
 
@@ -1100,6 +1113,73 @@ mod tests {
         assert_eq!(crate::to_string(&f64::INFINITY).unwrap(), "!n");
         assert_eq!(crate::to_string(&f64::NEG_INFINITY).unwrap(), "!n");
         assert_eq!(crate::to_string(&f64::NAN).unwrap(), "!n");
+    }
+
+    #[test]
+    fn test_error_offsets_and_categories() {
+        use crate::error::Category;
+
+        for (input, offset, category, message) in [
+            (
+                "(a:1",
+                4,
+                Category::Eof,
+                "unexpected end of input at offset 4",
+            ),
+            ("(a:1;", 4, Category::Syntax, "invalid number at offset 4"),
+            (
+                "'it!x'",
+                4,
+                Category::Syntax,
+                "invalid escape `!x` at offset 4",
+            ),
+            (
+                "!x",
+                1,
+                Category::Syntax,
+                "unexpected character `x` at offset 1",
+            ),
+            (
+                "!(1,2))",
+                6,
+                Category::Syntax,
+                "trailing characters at offset 6",
+            ),
+            (
+                "(a:1,)",
+                5,
+                Category::Syntax,
+                "unexpected character `)` at offset 5",
+            ),
+        ] {
+            let err = from_str::<Value>(input).unwrap_err();
+            assert_eq!(err.offset(), Some(offset), "{input:?}");
+            assert_eq!(err.classify(), category, "{input:?}");
+            assert_eq!(err.to_string(), message, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn test_type_mismatch_reports_invalid_type() {
+        #[derive(Deserialize, Debug)]
+        #[allow(dead_code)]
+        struct S {
+            a: u32,
+            b: f64,
+        }
+
+        let err = from_str::<S>("(a:x,b:1)").unwrap_err();
+        assert!(err.is_data());
+        assert_eq!(
+            err.to_string(),
+            "invalid type: string \"x\", expected u32 at offset 4"
+        );
+
+        let err = from_str::<S>("(a:1,b:!t)").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "invalid type: boolean `true`, expected f64 at offset 9"
+        );
     }
 
     #[test]
