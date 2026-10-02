@@ -46,7 +46,7 @@ pub use number::Number;
 pub use ser::Serializer;
 pub use ser::to_string;
 pub use value::Value;
-pub use value::from_value;
+pub use value::{from_value, to_value};
 
 pub type Result<T> = std::result::Result<T, Error>;
 

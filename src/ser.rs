@@ -23,17 +23,21 @@ impl Serializer {
             output: String::new(),
         }
     }
+
+    /// Returns the RISON written so far.
+    #[must_use]
+    pub fn into_inner(self) -> String {
+        self.output
+    }
 }
 
 pub fn to_string<T>(value: &T) -> Result<String>
 where
-    T: Serialize,
+    T: ?Sized + Serialize,
 {
-    let mut serializer = Serializer {
-        output: String::new(),
-    };
+    let mut serializer = Serializer::new();
     value.serialize(&mut serializer)?;
-    Ok(serializer.output)
+    Ok(serializer.into_inner())
 }
 
 impl ser::Serializer for &mut Serializer {
@@ -794,6 +798,19 @@ mod tests {
         let value: crate::Value = crate::from_str(&to_string(&ints).unwrap()).unwrap();
         let back: BTreeMap<i64, i32> = crate::from_value(value).unwrap();
         assert_eq!(back, ints);
+    }
+
+    #[test]
+    fn test_serializer_into_inner() {
+        let mut serializer = Serializer::new();
+        (1, "a b").serialize(&mut serializer).unwrap();
+        assert_eq!(serializer.into_inner(), "!(1,'a b')");
+    }
+
+    #[test]
+    fn test_to_string_unsized() {
+        assert_eq!(to_string("abc").unwrap(), "abc");
+        assert_eq!(to_string::<[u8]>(&[1, 2]).unwrap(), "!(1,2)");
     }
 
     #[test]

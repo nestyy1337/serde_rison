@@ -274,6 +274,19 @@ impl From<isize> for Number {
 }
 
 #[cfg(feature = "json")]
+impl From<Number> for serde_json::Number {
+    fn from(n: Number) -> Self {
+        match n.n {
+            N::PosInt(u) => u.into(),
+            N::NegInt(i) => i.into(),
+            N::Float(f) => {
+                serde_json::Number::from_f64(f).expect("Number holds only finite floats")
+            }
+        }
+    }
+}
+
+#[cfg(feature = "json")]
 impl TryFrom<serde_json::Number> for Number {
     type Error = Error;
 

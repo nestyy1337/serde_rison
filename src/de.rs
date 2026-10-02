@@ -75,7 +75,10 @@ impl<'de> Deserializer<'de> {
         }
     }
 
-    fn end(&self) -> Result<()> {
+    /// Checks that the whole input has been consumed. Call this after
+    /// deserializing a value to reject trailing characters, as
+    /// [`from_str`] does.
+    pub fn end(&self) -> Result<()> {
         match self.peek() {
             None => Ok(()),
             Some(_) => Err(self.error(ErrorCode::TrailingCharacters)),

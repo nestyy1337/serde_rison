@@ -28,6 +28,83 @@ impl std::fmt::Debug for Value {
     }
 }
 
+impl Value {
+    #[must_use]
+    pub fn is_null(&self) -> bool {
+        matches!(self, Value::Null)
+    }
+
+    #[must_use]
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            Value::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn as_number(&self) -> Option<&Number> {
+        match self {
+            Value::Number(n) => Some(n),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Value::String(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn as_array(&self) -> Option<&Vec<Value>> {
+        match self {
+            Value::Array(array) => Some(array),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn as_object(&self) -> Option<&BTreeMap<String, Value>> {
+        match self {
+            Value::Object(object) => Some(object),
+            _ => None,
+        }
+    }
+
+    /// Looks up `key` if this is an object.
+    #[must_use]
+    pub fn get(&self, key: &str) -> Option<&Value> {
+        self.as_object()?.get(key)
+    }
+}
+
+/// Formats the value as RISON.
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let rison = crate::to_string(self).map_err(|_| std::fmt::Error)?;
+        f.write_str(&rison)
+    }
+}
+
+#[cfg(feature = "json")]
+impl From<Value> for serde_json::Value {
+    fn from(value: Value) -> Self {
+        match value {
+            Value::Null => Self::Null,
+            Value::Bool(b) => Self::Bool(b),
+            Value::Number(n) => Self::Number(n.into()),
+            Value::String(s) => Self::String(s),
+            Value::Array(arr) => Self::Array(arr.into_iter().map(Into::into).collect()),
+            Value::Object(map) => {
+                Self::Object(map.into_iter().map(|(k, v)| (k, v.into())).collect())
+            }
+        }
+    }
+}
+
 #[cfg(feature = "json")]
 impl TryFrom<serde_json::Value> for Value {
     type Error = crate::Error;
@@ -58,6 +135,75 @@ where
     T: serde::de::DeserializeOwned,
 {
     T::deserialize(value)
+}
+
+/// Converts any serializable value into a [`Value`]. The result is what
+/// [`from_str`](crate::from_str) would return for the output of
+/// [`to_string`](crate::to_string).
+pub fn to_value<T>(value: &T) -> crate::Result<Value>
+where
+    T: ?Sized + serde::Serialize,
+{
+    crate::from_str(&crate::to_string(value)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde::Serialize;
+
+    #[test]
+    fn to_value_matches_text_roundtrip() {
+        #[derive(Serialize)]
+        struct S {
+            name: &'static str,
+            ids: BTreeMap<u32, bool>,
+            ratio: f64,
+            missing: Option<u8>,
+        }
+
+        let value = to_value(&S {
+            name: "a b",
+            ids: BTreeMap::from([(1, true)]),
+            ratio: 1.0,
+            missing: None,
+        })
+        .unwrap();
+
+        assert_eq!(value.get("name").and_then(Value::as_str), Some("a b"));
+        assert_eq!(
+            value
+                .get("ids")
+                .and_then(|ids| ids.get("1"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(
+            value
+                .get("ratio")
+                .and_then(Value::as_number)
+                .unwrap()
+                .is_f64()
+        );
+        assert!(value.get("missing").unwrap().is_null());
+        assert_eq!(
+            value.to_string(),
+            "(ids:('1':!t),missing:!n,name:'a b',ratio:1.0)"
+        );
+        assert_eq!(crate::from_str::<Value>(&value.to_string()).unwrap(), value);
+    }
+
+    #[test]
+    fn accessors_return_none_for_other_variants() {
+        let value = Value::Array(vec![Value::Null]);
+        assert_eq!(value.as_array().map(Vec::len), Some(1));
+        assert!(value.as_object().is_none());
+        assert!(value.get("a").is_none());
+        assert!(value.as_str().is_none());
+        assert!(value.as_bool().is_none());
+        assert!(value.as_number().is_none());
+        assert!(!value.is_null());
+    }
 }
 
 #[cfg(all(test, feature = "json"))]
@@ -148,6 +294,13 @@ mod json_tests {
             panic!("expected object")
         };
         assert_eq!(filter["key"], Value::String("status".into()));
+    }
+
+    #[test]
+    fn into_json() {
+        let json = serde_json::json!({"a": [1, -2, 2.5, null, true, "x"], "b": {}});
+        let rison = Value::try_from(json.clone()).unwrap();
+        assert_eq!(serde_json::Value::from(rison), json);
     }
 
     #[test]
