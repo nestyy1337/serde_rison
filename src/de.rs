@@ -231,12 +231,11 @@ impl<'de> Deserializer<'de> {
         }
     }
 
+    /// Reads an unquoted string. Characters outside the RISON id set (space
+    /// and `'!:(),*@$`) end it and need quoting.
     fn parse_unquoted(&mut self) -> Result<&'de str> {
         let start = self.index;
-        while let Some(c) = self
-            .peek()
-            .filter(|c| !matches!(c, '(' | ')' | ',' | ':' | '!' | '\''))
-        {
+        while let Some(c) = self.peek().filter(|&c| !is_reserved(c)) {
             self.index += c.len_utf8();
         }
         if self.index == start {
@@ -340,6 +339,13 @@ macro_rules! deserialize_wide_integer {
             }
         }
     };
+}
+
+fn is_reserved(c: char) -> bool {
+    matches!(
+        c,
+        ' ' | '\'' | '!' | ':' | '(' | ')' | ',' | '*' | '@' | '$'
+    )
 }
 
 enum NumberToken<'de> {
@@ -1508,6 +1514,40 @@ mod tests {
         assert_eq!(
             from_str::<u128>(&too_big).unwrap_err().to_string(),
             "number out of range at offset 0"
+        );
+    }
+
+    #[test]
+    fn test_unquoted_strings_follow_id_rules() {
+        for input in [
+            "abc",
+            "a-b",
+            "a.b/c~d_e",
+            "now-15m",
+            "zażółć",
+            "a%20b",
+            "+x",
+        ] {
+            assert_eq!(from_str::<String>(input).unwrap(), input);
+        }
+
+        for (input, message) in [
+            ("hello world", "trailing characters at offset 5"),
+            ("*", "unexpected character `*` at offset 0"),
+            ("logs-*", "trailing characters at offset 5"),
+            ("a@b", "trailing characters at offset 1"),
+            ("$x", "unexpected character `$` at offset 0"),
+            (" a", "unexpected character ` ` at offset 0"),
+        ] {
+            let err = from_str::<String>(input).unwrap_err();
+            assert_eq!(err.to_string(), message, "{input:?}");
+        }
+
+        assert!(from_str::<Value>("(a: 1)").is_err());
+        assert!(from_str::<Value>("(a b:1)").is_err());
+        assert_eq!(
+            from_str::<Value>("(index:'logs-*',q:'a b')").unwrap(),
+            from_str::<Value>("(q:'a b',index:'logs-*')").unwrap()
         );
     }
 
