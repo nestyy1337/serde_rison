@@ -12,6 +12,7 @@ struct ErrorImpl {
 
 /// Broad classification of an [`Error`].
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Category {
     /// The input is not syntactically valid RISON.
     Syntax,
