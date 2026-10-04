@@ -6,7 +6,7 @@ use serde::forward_to_deserialize_any;
 use crate::error::Error;
 
 /// Deserializes an object key. Keys are always strings in RISON; integer,
-/// float and bool targets parse the key text, the way serde_json does.
+/// float and bool targets parse the key text, the way `serde_json` does.
 pub(crate) struct MapKeyDeserializer<'de> {
     key: Cow<'de, str>,
 }
