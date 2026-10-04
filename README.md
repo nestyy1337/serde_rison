@@ -9,7 +9,6 @@ Heavily inspired by David Tolnay's [serde_json](https://github.com/serde-rs/json
 - No `Writer` / `Formatter` abstraction: just a plain `to_string` / `from_str` interface
 - No `io::Write` support: serialization builds a `String` in memory
 - No pretty-printing
-- No `to_value` yet
 
 ## Usage
 
